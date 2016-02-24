@@ -101,6 +101,14 @@ namespace Sitecore.Modules.SitemapXML
                 return GetValueByName("sitemapIndexFilename");
             }
         }
+
+        public static string IndexName
+        {
+            get
+            {
+                return GetValueByName("indexName");
+            }
+        }
         #endregion properties
 
         private static string GetValueByName(string name)

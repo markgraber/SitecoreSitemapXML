@@ -20,6 +20,8 @@
  * *********************************************************************** */
 
 using Sitecore.Configuration;
+using Sitecore.ContentSearch;
+using Sitecore.ContentSearch.SearchTypes;
 using Sitecore.Data;
 using Sitecore.Data.Items;
 using Sitecore.Diagnostics;
@@ -343,13 +345,19 @@ namespace Sitecore.Modules.SitemapXML
                 return new List<Item>();
             }
 
-            Item[] descendants;
+            ISearchIndex index;
+            List<Item> descendants;
+            index = SitemapManagerConfiguration.IndexName != null && !string.IsNullOrEmpty(SitemapManagerConfiguration.IndexName) ? ContentSearchManager.GetIndex(SitemapManagerConfiguration.IndexName) : ContentSearchManager.GetIndex("sitecore_web_index");
+            
             Sitecore.Security.Accounts.User user = Sitecore.Security.Accounts.User.FromName(@"extranet\Anonymous", true);
             using (new Sitecore.Security.Accounts.UserSwitcher(user))
             {
-                descendants = contentRoot.Axes.GetDescendants();
+                using (var context = index.CreateSearchContext())
+                {
+                    descendants = context.GetQueryable<SearchResultItem>().Select(i => (Item)i.GetItem()).ToList();
+                }
             }
-            List<Item> sitemapItems = descendants.ToList();
+            List<Item> sitemapItems = descendants;
             sitemapItems.Insert(0, contentRoot);
 
             List<string> enabledTemplates = this.BuildListFromString(disTpls, '|');
