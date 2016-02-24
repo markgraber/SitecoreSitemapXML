@@ -20,6 +20,8 @@
  * *********************************************************************** */
 
 using Sitecore.Configuration;
+using Sitecore.ContentSearch;
+using Sitecore.ContentSearch.SearchTypes;
 using Sitecore.Data;
 using Sitecore.Data.Items;
 using Sitecore.Diagnostics;
@@ -38,7 +40,7 @@ namespace Sitecore.Modules.SitemapXML
 {
     public class SitemapManager
     {
-		private Database _db = null;
+        private Database _db = null;
         private static StringDictionary m_Sites;
         public Database Db
         {
@@ -48,14 +50,16 @@ namespace Sitecore.Modules.SitemapXML
                 {
                     _db = Factory.GetDatabase(SitemapManagerConfiguration.WorkingDatabase);
                 }
-                
+
                 return _db;
             }
         }
 
         private DeviceItem _defaultDevice = null;
-        private DeviceItem DefaultDevice {
-            get {
+        private DeviceItem DefaultDevice
+        {
+            get
+            {
                 if (_defaultDevice == null)
                 {
                     _defaultDevice = Db.Resources.Devices.GetAll().Where(i => i.IsDefault).FirstOrDefault();
@@ -79,19 +83,21 @@ namespace Sitecore.Modules.SitemapXML
         private void BuildSiteMap(string sitename, string sitemapUrlNew)
         {
             Site site = Sitecore.Sites.SiteManager.GetSite(sitename);
-            SiteContext siteContext = Factory.GetSite(sitename);
-            string rootPath = siteContext.StartPath;
+            if (site != null)
+            {
+                SiteContext siteContext = Factory.GetSite(sitename);
+                string rootPath = siteContext.StartPath;
 
-            List<Item> items = GetSitemapItems(rootPath);
+                List<Item> items = GetSitemapItems(rootPath);
 
 
-            string fullPath = MainUtil.MapPath(string.Concat("/", sitemapUrlNew));
-            string xmlContent = this.BuildSitemapXML(items, site, siteContext);
+                string fullPath = MainUtil.MapPath(string.Concat("/", sitemapUrlNew));
+                string xmlContent = this.BuildSitemapXML(items, site, siteContext);
 
-            StreamWriter strWriter = new StreamWriter(fullPath, false);
-            strWriter.Write(xmlContent);
-            strWriter.Close();
-
+                StreamWriter strWriter = new StreamWriter(fullPath, false);
+                strWriter.Write(xmlContent);
+                strWriter.Close();
+            }
         }
 
         private void BuildSiteMapIndex()
@@ -120,11 +126,14 @@ namespace Sitecore.Modules.SitemapXML
             foreach (DictionaryEntry siteEntry in m_Sites)
             {
                 Site site = Sitecore.Sites.SiteManager.GetSite(siteEntry.Key.ToString());
-                string filename = siteEntry.Value.ToString();
+                if (site != null)
+                {
+                    string filename = siteEntry.Value.ToString();
 
-                string serverUrl = SitemapManagerConfiguration.GetServerUrlBySite(site.Name);
+                    string serverUrl = SitemapManagerConfiguration.GetServerUrlBySite(site.Name);
 
-                doc = this.BuildSitemapIndexItem(doc, string.Format("{0}/{1}", serverUrl, filename));
+                    doc = this.BuildSitemapIndexItem(doc, string.Format("{0}/{1}", serverUrl, filename));
+                }
             }
 
             return doc.OuterXml;
@@ -167,8 +176,11 @@ namespace Sitecore.Modules.SitemapXML
                     if (engine != null)
                     {
                         string engineHttpRequestString = engine.Fields["HttpRequestString"].Value;
-                        foreach (string sitemapUrl in m_Sites.Values)
-                            this.SubmitEngine(engineHttpRequestString, sitemapUrl);
+                        if (!string.IsNullOrEmpty(engineHttpRequestString))
+                        {
+                            foreach (string sitemapUrl in m_Sites.Values)
+                                this.SubmitEngine(engineHttpRequestString, sitemapUrl);
+                        }
                     }
                 }
                 result = true;
@@ -190,7 +202,7 @@ namespace Sitecore.Modules.SitemapXML
             }
 
             StreamWriter sw = new StreamWriter(robotsPath, false);
-            
+
             // If production, add sitemap Urls to robots.txt.  Otherwise, disallow all bots.
             if (SitemapManagerConfiguration.IsProductionEnvironment)
             {
@@ -217,6 +229,8 @@ namespace Sitecore.Modules.SitemapXML
         {
             string strSiteLanguage = "";
             site.Properties.TryGetValue("language", out strSiteLanguage);
+            if (string.IsNullOrEmpty(strSiteLanguage))
+                strSiteLanguage = siteContext.Language;
 
             XmlDocument doc = new XmlDocument();
             string url = "";
@@ -270,7 +284,7 @@ namespace Sitecore.Modules.SitemapXML
 
             options.SiteResolving = Sitecore.Configuration.Settings.Rendering.SiteResolving;
             options.Site = SiteContext.GetSite(site.Name);
-			options.AlwaysIncludeServerUrl = false;
+            options.AlwaysIncludeServerUrl = false;
 
             string serverUrl = SitemapManagerConfiguration.GetServerUrlBySite(site.Name);
             string itemUrl = Sitecore.Links.LinkManager.GetItemUrl(item, options);
@@ -283,7 +297,7 @@ namespace Sitecore.Modules.SitemapXML
             {
                 return string.Format("{0}{1}", serverUrl, itemUrl);
             }
-            
+
         }
 
         private static string HtmlEncode(string text)
@@ -331,13 +345,19 @@ namespace Sitecore.Modules.SitemapXML
                 return new List<Item>();
             }
 
-            Item[] descendants;
+            ISearchIndex index;
+            List<Item> descendants;
+            index = SitemapManagerConfiguration.IndexName != null && !string.IsNullOrEmpty(SitemapManagerConfiguration.IndexName) ? ContentSearchManager.GetIndex(SitemapManagerConfiguration.IndexName) : ContentSearchManager.GetIndex("sitecore_web_index");
+            
             Sitecore.Security.Accounts.User user = Sitecore.Security.Accounts.User.FromName(@"extranet\Anonymous", true);
             using (new Sitecore.Security.Accounts.UserSwitcher(user))
             {
-                descendants = contentRoot.Axes.GetDescendants();
+                using (var context = index.CreateSearchContext())
+                {
+                    descendants = context.GetQueryable<SearchResultItem>().Select(i => (Item)i.GetItem()).ToList();
+                }
             }
-            List<Item> sitemapItems = descendants.ToList();
+            List<Item> sitemapItems = descendants;
             sitemapItems.Insert(0, contentRoot);
 
             List<string> enabledTemplates = this.BuildListFromString(disTpls, '|');
@@ -352,7 +372,7 @@ namespace Sitecore.Modules.SitemapXML
             {
                 selected = sitemapItems.Where(itm => HasLayout(itm, DefaultDevice) && !excludedNames.Contains(itm.ID.ToString())).ToList();
             }
-            
+
             return selected;
         }
 
